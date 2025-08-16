@@ -6,14 +6,14 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"log"
 	"testing"
 	"time"
-
-	"github.com/wangdahao-wh/redis-lock/mocks"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wangdahao-wh/redis-lock/mocks"
 	"go.uber.org/mock/gomock"
 )
 
@@ -191,4 +191,88 @@ func TestLock_Unlock(t *testing.T) {
 
 	}
 
+}
+
+func TestLock_Refresh(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	testCases := []struct {
+		name    string
+		lock    func() *Lock
+		wantErr error
+	}{
+		{
+			// 续约成功
+			name: "refreshed",
+			lock: func() *Lock {
+				rdb := mocks.NewMockCmdable(ctrl)
+				res := redis.NewCmd(context.Background(), nil)
+				res.SetVal(int64(1))
+				expir := time.Millisecond * 60
+				rdb.EXPECT().
+					Eval(gomock.Any(), luaRefresh, []string{"refreshed"},
+						[]any{"123", expir.Milliseconds()}).
+					Return(res)
+				log.Printf("Refresh args - expiration: %d (%T)",
+					expir, expir)
+				return &Lock{
+					client:     rdb,
+					Key:        "refreshed",
+					Value:      "123",
+					Expiration: expir,
+				}
+			},
+			wantErr: nil,
+		},
+		{
+			// 键不存在
+			name: "key not exist",
+			lock: func() *Lock {
+				rdb := mocks.NewMockCmdable(ctrl)
+				res := redis.NewCmd(context.Background(), nil)
+				res.SetErr(redis.Nil)
+				expir := time.Millisecond * 60
+				rdb.EXPECT().
+					Eval(gomock.Any(), luaRefresh, []string{"refreshed"},
+						[]any{"123", expir.Milliseconds()}).
+					Return(res)
+				return &Lock{
+					client:     rdb,
+					Key:        "refreshed",
+					Value:      "123",
+					Expiration: expir,
+				}
+			},
+			wantErr: ErrLockNotHold,
+		},
+		{
+			// 执行错误
+			name: "lock not hold",
+			lock: func() *Lock {
+				rdb := mocks.NewMockCmdable(ctrl)
+				res := redis.NewCmd(context.Background(), nil)
+				res.SetVal(int64(0))
+				expir := time.Millisecond * 60
+				rdb.EXPECT().
+					Eval(gomock.Any(), luaRefresh, []string{"refreshed"},
+						[]any{"123", expir.Milliseconds()}).
+					Return(res)
+				return &Lock{
+					client:     rdb,
+					Key:        "refreshed",
+					Value:      "123",
+					Expiration: expir,
+				}
+			},
+			wantErr: ErrLockNotHold,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(test *testing.T) {
+			err := tc.lock().Refresh(context.Background())
+			assert.Equal(t, tc.wantErr, err)
+		})
+	}
 }
