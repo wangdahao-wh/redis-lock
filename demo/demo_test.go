@@ -4,11 +4,12 @@ package demo
 
 import (
 	"context"
-	"demo_redis/mocks"
 	_ "embed"
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/wangdahao-wh/redis-lock/mocks"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
