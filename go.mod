@@ -1,4 +1,4 @@
-module demo_redis
+module github.com/wangdahao-wh/redis-lock
 
 go 1.24.4
 
