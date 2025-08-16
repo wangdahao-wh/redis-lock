@@ -8,6 +8,8 @@ import (
 	"errors"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	rlock "github.com/wangdahao-wh/redis-lock"
@@ -15,6 +17,7 @@ import (
 
 type Client struct {
 	Client redis.Cmdable
+	s      singleflight.Group
 }
 
 var (
@@ -31,6 +34,31 @@ var (
 func NewClient(c redis.Cmdable) *Client {
 	return &Client{
 		Client: c,
+	}
+}
+
+// 高并发场景下加锁
+func (c *Client) SingleflightLock(ctx context.Context, key string, expiration time.Duration,
+	retry rlock.RetryStrategy, timeout time.Duration) (*Lock, error) {
+	for {
+		flag := false
+		// singleflight.Group 可以防止多个goroutine同时对同一个资源进行冗余的操作
+		// DoChan方法会确保对于相同的key，只有一个goroutine执行传入的函数
+		resCh := c.s.DoChan(key, func() (interface{}, error) {
+			flag = true
+			return c.Lock(ctx, key, expiration, retry, timeout)
+		})
+		select {
+		case res := <-resCh:
+			if flag {
+				if res.Err != nil {
+					return nil, res.Err
+				}
+				return res.Val.(*Lock), nil
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ require (
 	github.com/redis/go-redis/v9 v9.12.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/mock v0.5.2
+	golang.org/x/sync v0.7.0
 )
 
 require (
