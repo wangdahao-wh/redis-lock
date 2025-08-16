@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	rlock "github.com/wangdahao-wh/redis-lock"
 )
 
 type Client struct {
@@ -23,6 +24,8 @@ var (
 	luaUnlock string
 	// go:embed refresh.lua
 	luaRefresh string
+	// go:embed lock.lua
+	luaLock string
 )
 
 func NewClient(c redis.Cmdable) *Client {
@@ -30,6 +33,49 @@ func NewClient(c redis.Cmdable) *Client {
 		Client: c,
 	}
 }
+
+func (c *Client) Lock(ctx context.Context, key string, expiration time.Duration,
+	retry rlock.RetryStrategy, timeout time.Duration) (*Lock, error) {
+	val := uuid.New().String()
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		rctx, cancel := context.WithTimeout(ctx, timeout)
+		res, err := c.Client.
+			Eval(rctx, luaLock, []string{key}, val, expiration).
+			Bool()
+		cancel()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			// DeadlineExceeded表示单次操作超时
+			// 注意：如果是单次操作超时，我们将其视为获取锁失败，会继续重试。
+			return nil, err
+		}
+		if res {
+			// 加锁成功
+			return NewLock(c.Client, key, val, expiration), nil
+		}
+		//重试
+		interval, ok := retry.Next()
+		if !ok {
+			return nil, ErrFailedToPreemptLock
+		}
+		if timer == nil {
+			timer = time.NewTimer(interval)
+		}
+		timer.Reset(interval)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			// 继续for循环
+		}
+	}
+}
+
 func (c *Client) TryLock(ctx context.Context, key string,
 	expiration time.Duration) (*Lock, error) {
 	val := uuid.New().String()
